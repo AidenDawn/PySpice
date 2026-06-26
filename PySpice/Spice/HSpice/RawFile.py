@@ -11,14 +11,36 @@ from PySpice.Probe.WaveForm import (
 
 class AnalysisList(list):
   def __init__(self, analyses, measurements=None):
+    """
+    Initialize the list with analyses and an optional measurement mapping.
+    
+    Parameters:
+    	analyses: Initial analysis objects.
+    	measurements: Mapping of measurement names to values.
+    """
     super().__init__(analyses)
     self._measurements = measurements or {}
 
   @property
   def measurements(self):
+    """
+    Measurement mapping associated with the analysis list.
+    
+    Returns:
+        dict: The stored measurement values.
+    """
     return self._measurements
 
   def __getattr__(self, name):
+    """
+    Return a measurement by attribute name.
+    
+    Parameters:
+    	name (str): The measurement name to look up.
+    
+    Returns:
+    	The measurement value for the exact or lowercased name.
+    """
     if name in self._measurements:
       return self._measurements[name]
     if name.lower() in self._measurements:
@@ -26,6 +48,19 @@ class AnalysisList(list):
     raise AttributeError(f"'AnalysisList' object has no attribute '{name}'")
 
   def __getitem__(self, item):
+    """
+    Return a list item or a measurement by name.
+    
+    Parameters:
+    	item: An index, slice, or measurement name.
+    
+    Returns:
+    	The selected analysis item or measurement value.
+    
+    Raises:
+    	IndexError: If the measurement name is not found.
+    	KeyError: If item is not an index, slice, or string.
+    """
     if isinstance(item, (int, slice)):
       return super().__getitem__(item)
     if isinstance(item, str):
@@ -44,6 +79,17 @@ class HSpiceRawFile:
     def __init__(
         self, data, simulation=None, measurements=None, op_nodes=None, op_branches=None, analysis_type=None
     ):
+        """
+        Initialize a wrapper for parsed HSPICE raw data and related metadata.
+        
+        Parameters:
+            data: Parsed raw simulation data.
+            simulation: Associated simulation object.
+            measurements: Mapping of measurement names to values.
+            op_nodes: Operating-point node values.
+            op_branches: Operating-point branch values.
+            analysis_type: HSPICE analysis type code.
+        """
         self.data = data
         self._simulation = simulation
         self.measurements = measurements or {}
@@ -53,13 +99,31 @@ class HSpiceRawFile:
 
     @property
     def simulation(self):
+        """
+        Return the associated simulation.
+        
+        Returns:
+        	simulation: The stored simulation object.
+        """
         return self._simulation
 
     @simulation.setter
     def simulation(self, value):
+        """
+        Set the associated simulation.
+        
+        Parameters:
+        	value: The simulation to associate with this raw file.
+        """
         self._simulation = value
 
     def to_analysis(self):
+        """
+        Convert the parsed HSPICE raw content into PySpice analysis objects.
+        
+        Returns:
+        	An OperatingPoint, AcAnalysis, DcAnalysis, or TransientAnalysis instance, or an AnalysisList when the raw file contains multiple sweeps.
+        """
         if self.data is None and self._analysis_type == "o":
             # This is an operating point simulation!
             nodes = [

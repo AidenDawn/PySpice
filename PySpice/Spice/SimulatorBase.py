@@ -45,27 +45,28 @@ class Simulator:
 
     @classmethod
     def register_simulator_class(cls, name, sub_cls):
+        """
+        Register a simulator implementation under a name.
+        
+        Parameters:
+        	name (str): The simulator name used for lookup.
+        	sub_cls (type): The simulator subclass to register.
+        """
         cls._SIMULATOR_CLASSES[name] = sub_cls
 
     @classmethod
     def factory(cls, *args, **kwargs):
-        """Factory to instantiate a simulator.
-
-        By default, it instantiates the simulator defined in :obj:`DEFAULT_SIMULATOR`, however you
-        can set the simulator using the :obj:`simulator` parameter.
-
-        Available simulators are:
-
-        * :code:`ngspice` **alias for shared**
-        * :code:`ngspice-shared` **DEFAULT**
-        * :code:`ngspice-subprocess`
-        * :code:`xyce` **alias for serial**
-        * :code:`xyce-serial`
-        * :code:`xyce-parallel`
-        * :code:`hspice`
-
-        Return a :obj:`PySpice.Spice.Simulator` subclass.
-
+        """
+        Instantiate a registered simulator backend.
+        
+        Parameters:
+            simulator (str): Name of the simulator backend to create.
+        
+        Returns:
+            Simulator: An instance of the registered simulator subclass.
+        
+        Raises:
+            NameError: If the requested simulator is not registered.
         """
         simulator = kwargs.pop("simulator", cls.DEFAULT_SIMULATOR)
 
@@ -80,29 +81,64 @@ class Simulator:
 
     def __getstate__(self):
         # Pickle: protection for cffi
+        """
+        Return the class name for pickling support.
+        
+        Returns:
+        	class_name (str): The simulator class name.
+        """
         return self.__class__.__name__
 
     def simulation(self, circuit, **kwargs):
-        """Create a new simulation for the circuit.
-
-        Return a :obj:`PySpice.Spice.Simulation` instance`
-
+        """
+        Create a simulation for a circuit.
+        
+        Parameters:
+        	circuit: Circuit to simulate.
+        
+        Returns:
+        	Simulation: A simulation configured for the circuit.
         """
         # Note: simulation is simulator dependent, thus subclass this method if needed
         return Simulation(self, circuit, **kwargs)
 
     @property
     def name(self):
+        """
+        Name of the selected simulator backend.
+        
+        Returns:
+        	simulator_name (str): The registered simulator name associated with this instance.
+        """
         return self._AS_SIMULATOR
 
     @property
     def version(self):
+        """
+        Return the simulator version.
+        
+        Returns:
+        	str: The simulator version string.
+        
+        Raises:
+        	NotImplementedError: This method must be implemented by subclasses.
+        """
         raise NotImplementedError
 
     def customise(self, simulation):
-        """Customise the simulation"""
+        """
+        Customize the simulation before it runs.
+        
+        Parameters:
+            simulation: The simulation instance to customize.
+        """
         pass
 
     def run(self, simulation):
-        """Run the simulation and return the waveforms."""
+        """
+        Run the simulation and return the waveforms.
+        
+        Parameters:
+        	simulation: The simulation to execute.
+        """
         raise NotImplementedError

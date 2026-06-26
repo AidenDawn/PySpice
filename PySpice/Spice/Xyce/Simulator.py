@@ -47,6 +47,14 @@ class XyceSimulator(Simulator):
 
     def __init__(self, **kwargs):
         # super().__init__(**kwargs)
+        """
+        Initialize the Xyce simulator server and parallel mode.
+        
+        Parameters:
+        	xyce_command: Command used to start Xyce.
+        	parallel: Enables parallel execution mode.
+        	simulator: Selects parallel mode when set to 'xyce-parallel'.
+        """
         xyce_command = kwargs.get('xyce_command', None)
         self._xyce_server = XyceServer(xyce_command=xyce_command)
         self._parallel = kwargs.get('parallel', False) or kwargs.get('simulator') == 'xyce-parallel'

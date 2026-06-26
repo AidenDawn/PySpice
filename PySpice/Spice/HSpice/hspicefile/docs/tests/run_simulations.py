@@ -359,6 +359,11 @@ versions = ["9007", "9601", "2001", "2013", "ascii"]
 
 def main():
   # Ensure the logs directory exists and is clean
+  """
+  Run the HSPICE option-space simulation matrix and report pass or fail counts.
+  
+  Writes fresh netlists under `work/`, captures command output in `logs/`, and exits with a nonzero status if any case does not produce its expected output file.
+  """
   logs_dir = "logs"
   if os.path.exists(logs_dir):
     shutil.rmtree(logs_dir)
@@ -375,6 +380,12 @@ def main():
   run_log = open(run_log_path, "w")
 
   def log_and_print(msg):
+    """
+    Print a message and write it to the run log.
+    
+    Parameters:
+    	msg (str): Message to write.
+    """
     print(msg)
     run_log.write(msg + "\n")
     run_log.flush()

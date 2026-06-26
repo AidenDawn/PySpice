@@ -44,14 +44,33 @@ from PySpice.Spice.HSpice.hspicefile import hspice_read
 # ---------------------------------------------------------------------------
 
 def _close(a, b, rtol=1e-3):
-  """Relative tolerance float comparison."""
+  """
+  Compare two numeric values using relative tolerance.
+  
+  Parameters:
+  	a: The first value.
+  	b: The reference value.
+  	rtol: The maximum allowed relative difference.
+  
+  Returns:
+  	`true` if the values are within the specified tolerance, `false` otherwise.
+  """
   if b == 0:
     return abs(a) < 1e-30
   return abs(a - b) / abs(b) < rtol
 
 
 def _find(data_dict, partial):
-  """Find a key that equals or starts with `partial` (handles truncated names)."""
+  """
+  Return the first dictionary key that matches a prefix.
+  
+  Parameters:
+  	data_dict: The dictionary to search.
+  	partial: The exact key or key prefix to match.
+  
+  Returns:
+  	The matching key, or None if no key matches.
+  """
   for k in data_dict:
     if k == partial or k.startswith(partial):
       return k
@@ -60,15 +79,18 @@ def _find(data_dict, partial):
 
 def _unpack(result):
   """
-  Unpack the hspice_read return value into a convenient structure.
-
+  Unpack the top-level hspice_read() result into its component fields.
+  
   Returns:
-    title:       str
-    date:        str
-    scale_name:  str  (the independent variable name, lowercased)
-    sweep_name:  str or None  (outer sweep variable, e.g. 'rval')
-    sweep_vals:  numpy.ndarray or None  (outer sweep point values)
-    data_list:   list[dict]  (one dict per sweep point)
+  	title (str): The simulation title.
+  	date (str): The simulation date string.
+  	scale_name (str): The independent variable name.
+  	sweep_name (str or None): The outer sweep variable name.
+  	sweep_vals (numpy.ndarray or None): The outer sweep values.
+  	data_list (list[dict]): One data table per sweep point.
+  
+  Raises:
+  	AssertionError: If the result does not match the expected return structure.
   """
   assert isinstance(result, list) and len(result) == 1, \
     f"Expected list of length 1, got {type(result)} len={len(result)}"
@@ -90,9 +112,13 @@ def _unpack(result):
 
 def make_tests():
   """
-  Return list of (filename, case_name, assertion_fn).
-  assertion_fn(title, date, scale_name, sweep_name, sweep_vals, data_list)
-    -> list[str] of error messages (empty = PASS)
+  Build the regression test cases for HSpice output parsing.
+  
+  Returns:
+  	tests (list[tuple[str, str, callable]]): Test cases as
+  		(filename, case_name, assertion_fn) tuples. Each assertion function
+  		takes (title, date, scale_name, sweep_name, sweep_vals, data_list) and
+  		returns a list of error messages; an empty list indicates success.
   """
   tests = []
 
@@ -137,6 +163,12 @@ def make_tests():
   # Temperature is the primary DC sweep axis, not an outer parameter.
   # ------------------------------------------------------------------
   def dc_sweep_temp(title, date, scale_name, sweep_name, sweep_vals, data_list):
+    """
+    Validate the temperature-sweep DC table shape and scale range.
+    
+    Returns:
+    	errs (list[str]): Assertion failure messages for any mismatched expectations.
+    """
     errs = []
     if len(data_list) != 1:
       errs.append(f"Expected 1 table, got {len(data_list)}")
@@ -163,6 +195,20 @@ def make_tests():
   # rval is the primary DC sweep axis, not an outer parameter.
   # ------------------------------------------------------------------
   def dc_sweep_param(title, date, scale_name, sweep_name, sweep_vals, data_list):
+    """
+    Validate a DC parameter sweep table.
+    
+    Parameters:
+    	title: Test title.
+    	date: Test date.
+    	scale_name: Name of the sweep axis column.
+    	sweep_name: Outer sweep name.
+    	sweep_vals: Outer sweep values.
+    	data_list: Tables returned for the case.
+    
+    Returns:
+    	list[str]: Assertion failure messages for any mismatches.
+    """
     errs = []
     if len(data_list) != 1:
       errs.append(f"Expected 1 table, got {len(data_list)}")
@@ -189,6 +235,20 @@ def make_tests():
   # data_list has 5 entries (one per Monte Carlo sample)
   # ------------------------------------------------------------------
   def dc_monte(title, date, scale_name, sweep_name, sweep_vals, data_list):
+    """
+    Validate Monte Carlo DC tables.
+    
+    Parameters:
+    	title: The simulation title.
+    	date: The simulation date.
+    	scale_name: The name of the scale axis.
+    	sweep_name: The outer sweep variable name.
+    	sweep_vals: The outer sweep values.
+    	data_list: The Monte Carlo result tables.
+    
+    Returns:
+    	list[str]: Assertion failure messages for any mismatches; an empty list if the case passes.
+    """
     errs = []
     if len(data_list) != 5:
       errs.append(f"Expected 5 Monte Carlo tables, got {len(data_list)}")
@@ -214,6 +274,20 @@ def make_tests():
   #    data_list has 3 entries, each with 5 rows
   # ------------------------------------------------------------------
   def dc_nested_sweep(title, date, scale_name, sweep_name, sweep_vals, data_list):
+    """
+    Validate the DC nested sweep output structure and expected sweep values.
+    
+    Parameters:
+    	title: Unused result title.
+    	date: Unused result date.
+    	scale_name: Name of the primary scale variable.
+    	sweep_name: Name of the outer sweep variable.
+    	sweep_vals: Outer sweep values.
+    	data_list: Tables returned for each outer sweep value.
+    
+    Returns:
+    	list[str]: Validation error messages for any mismatches; an empty list indicates success.
+    """
     errs = []
     if sweep_name is None:
       errs.append("Expected outer sweep variable, got None")
@@ -274,6 +348,9 @@ def make_tests():
   # => 3 outer sweep tables; each dict has 'node_a', 'node_b'
   # ------------------------------------------------------------------
   def dc_probe_and_sweep(title, date, scale_name, sweep_name, sweep_vals, data_list):
+    """
+    Validate that each sweep table contains the expected DC probe variables.
+    """
     errs = []
     if len(data_list) != 3:
       errs.append(f"Expected 3 tables, got {len(data_list)}")
@@ -292,6 +369,12 @@ def make_tests():
   # scale=hertz (or 'freq'), freq range 100..10000 Hz
   # ------------------------------------------------------------------
   def ac_basic(title, date, scale_name, sweep_name, sweep_vals, data_list):
+    """
+    Validate the structure and contents of a basic AC analysis table.
+    
+    Returns:
+    	errs (list[str]): Assertion failure messages for any mismatched table shape, frequency range, or variable dtype.
+    """
     errs = []
     if len(data_list) != 1:
       errs.append(f"Expected 1 table, got {len(data_list)}")
@@ -326,6 +409,16 @@ def make_tests():
   # AC SWEEP PARAM: rval 10 30 10, 3 outer tables, each with freq points
   # ------------------------------------------------------------------
   def ac_sweep_param(title, date, scale_name, sweep_name, sweep_vals, data_list):
+    """
+    Validate AC parameter-sweep output structure and frequency coverage.
+    
+    Parameters:
+    	sweep_vals: Sweep values expected for the parameter sweep.
+    	data_list: Tables returned for each sweep point.
+    
+    Returns:
+    	list[str]: Validation error messages for the case.
+    """
     errs = []
     if len(data_list) != 3:
       errs.append(f"Expected 3 tables, got {len(data_list)}")
@@ -354,6 +447,12 @@ def make_tests():
   # AC SWEEP TEMP: temp -40 120 40, 5 outer tables, complex circuit vars
   # ------------------------------------------------------------------
   def ac_sweep_temp(title, date, scale_name, sweep_name, sweep_vals, data_list):
+    """
+    Validate AC temperature sweep results.
+    
+    Returns:
+    	errs (list[str]): Assertion failure messages, or an empty list if the case passes.
+    """
     errs = []
     if len(data_list) != 5:
       errs.append(f"Expected 5 tables, got {len(data_list)}")
@@ -391,6 +490,12 @@ def make_tests():
   # TRAN BASIC: time 0..20ns step 1ns, 1 table, real (float64) vars
   # ------------------------------------------------------------------
   def tran_basic(title, date, scale_name, sweep_name, sweep_vals, data_list):
+    """
+    Validate a basic transient analysis table.
+    
+    Returns:
+    	errs (list[str]): Assertion failure messages for any mismatches.
+    """
     errs = []
     if len(data_list) != 1:
       errs.append(f"Expected 1 table, got {len(data_list)}")
@@ -421,6 +526,12 @@ def make_tests():
   # TRAN SWEEP TEMP: temp -40..120 step 40, 5 outer tables
   # ------------------------------------------------------------------
   def tran_sweep_temp(title, date, scale_name, sweep_name, sweep_vals, data_list):
+    """
+    Validate TRAN results for a temperature sweep.
+    
+    Returns:
+    	errs (list[str]): A list of validation error messages.
+    """
     errs = []
     if len(data_list) != 5:
       errs.append(f"Expected 5 tables, got {len(data_list)}")
@@ -461,6 +572,12 @@ def make_tests():
   # TRAN SWEEP SOURCE: v2 1..3 step 1, 3 outer tables
   # ------------------------------------------------------------------
   def tran_sweep_source(title, date, scale_name, sweep_name, sweep_vals, data_list):
+    """
+    Validate TRAN sweep-source results.
+    
+    Returns:
+    	errs (list[str]): Assertion failure messages for mismatched table count or sweep values.
+    """
     errs = []
     if len(data_list) != 3:
       errs.append(f"Expected 3 tables, got {len(data_list)}")
@@ -496,6 +613,12 @@ def make_tests():
   # TRAN MONTE: 5 Monte Carlo runs, each with time-domain real data
   # ------------------------------------------------------------------
   def tran_monte(title, date, scale_name, sweep_name, sweep_vals, data_list):
+    """
+    Validate Monte Carlo transient tables.
+    
+    Returns:
+    	errs (list[str]): Assertion failure messages for any validation issues.
+    """
     errs = []
     if len(data_list) != 5:
       errs.append(f"Expected 5 Monte Carlo tables, got {len(data_list)}")
@@ -531,6 +654,9 @@ def main():
 
   with open(log_path, "w") as lf:
     def log(msg):
+      """
+      Write a message to standard output and the log file.
+      """
       print(msg)
       lf.write(msg + "\n")
       lf.flush()

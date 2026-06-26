@@ -25,7 +25,14 @@ WORK_DIR = "work"
 # ---------------------------------------------------------------------------
 
 def _read_header(f):
-  """Return (payload_bytes, fmt_char). Raises on corruption."""
+  """
+  Read and validate a binary file header.
+  
+  Returns the header payload and the detected struct byte-order prefix.
+  
+  Returns:
+  	tuple[bytes, str]: The header payload bytes and the format character, either "<" or ">".
+  """
   head = f.read(16)
   if len(head) < 16:
     raise IOError("Header block head truncated")
@@ -47,7 +54,15 @@ def _read_header(f):
 
 
 def _parse_header_meta(payload):
-  """Return metadata dict parsed from header payload bytes."""
+  """
+  Parse header metadata from a binary HSPICE payload.
+  
+  Parameters:
+      payload (bytes): Raw header payload bytes read from the file.
+  
+  Returns:
+      dict: Metadata including the file version, variable counts, sweep size, title, and variable names and types.
+  """
   c = payload.decode("ascii", errors="ignore")
   v16 = c[16:20].strip()
   v20 = c[20:24].strip()
@@ -96,6 +111,17 @@ def _parse_header_meta(payload):
 
 
 def _is_term_block(payload, version, fmt):
+  """
+  Detect whether a payload block is a table terminator.
+  
+  Parameters:
+  	payload: Raw block payload bytes.
+  	version: File format version string.
+  	fmt: Struct endianness prefix.
+  
+  Returns:
+  	`true` if the payload contains a sentinel value greater than `9e29`, `false` otherwise.
+  """
   sz = len(payload)
   if version in ("2013", "2001"):
     if sz == 8:
@@ -111,6 +137,15 @@ def _is_term_block(payload, version, fmt):
 
 
 def _var_sizes(meta):
+  """
+  Determine the storage size of each vector in a binary HSPICE result file.
+  
+  Parameters:
+  	meta (dict): Parsed header metadata containing the file version, vector count, and vector types.
+  
+  Returns:
+  	tuple: A pair of the per-vector byte sizes and a flag indicating whether the vectors are complex.
+  """
   version    = meta["version"]
   is_complex = meta["num_vectors"] > 1 and meta["var_types"][0] == 2
   sizes = []
@@ -127,6 +162,15 @@ def _var_sizes(meta):
 
 
 def parse_spice_value(val_str):
+  """
+  Parse a SPICE-style numeric string into a float.
+  
+  Parameters:
+  	val_str (str): String containing a numeric value, optionally with an SI suffix such as `f`, `p`, `n`, `u`, `meg`, `m`, `k`, or `g`.
+  
+  Returns:
+  	float: The parsed numeric value.
+  """
   val_str = val_str.strip().lower()
   if val_str.endswith("f"):
     return float(val_str[:-1]) * 1e-15
@@ -155,6 +199,15 @@ def parse_spice_value(val_str):
 
 
 def parse_meas_file(filepath):
+  """
+  Parse a measurement results file into a mapping of names to values.
+  
+  Parameters:
+  	filepath (str): Path to the measurement file.
+  
+  Returns:
+  	dict[str, object] | None: Measurement values keyed by lowercased name, or `None` if the file is missing or does not contain usable data. Sweep outputs map each name to a list of values.
+  """
   if not os.path.exists(filepath):
     return None
   with open(filepath, "r", errors="ignore") as f:
@@ -191,11 +244,11 @@ def parse_meas_file(filepath):
 
 def parse_binary(filename):
   """
-  Parse a binary HSPICE output file.
-  Returns a list of sweep tables; each table is a dict:
-    { var_name: list_of_float_or_complex, ... }
-  For AC, circuit values are complex.
-  Also returns the metadata dict.
+  Parse a binary HSPICE output file into sweep tables and metadata.
+  
+  Returns:
+  	tables (list[dict[str, list[float | complex]]] | None): Parsed sweep tables, or `None` for ASCII-like files.
+  	meta (dict | None): Metadata for the file, including any parsed measurements, or `None` for ASCII-like files.
   """
   with open(filename, "rb") as f:
     first = f.read(1)
@@ -284,8 +337,12 @@ def parse_binary(filename):
 def parse_ascii(filename):
   """
   Parse an HSPICE ASCII post=2 output file.
-  Returns a list of sweep tables; each table is a dict of name -> list of float/complex.
-  ASCII format: header line starting with a digit, then data rows.
+  
+  Parameters:
+  	filename (str): Path to the ASCII output file.
+  
+  Returns:
+  	list[dict[str, list[float]]] | None: Sweep tables keyed by variable name, or None if the file does not exist or contains no parseable tables.
   """
   if not os.path.exists(filename):
     return None
@@ -350,7 +407,17 @@ def parse_ascii(filename):
 # ---------------------------------------------------------------------------
 
 def _close(a, b, rtol=1e-3):
-  """Relative tolerance comparison for floats."""
+  """
+  Compare two floats using a relative tolerance.
+  
+  Parameters:
+  	a (float): The value to compare.
+  	b (float): The reference value.
+  	rtol (float): The maximum allowed relative difference.
+  
+  Returns:
+  	bool: ``true`` if the values are within tolerance, ``false`` otherwise.
+  """
   if b == 0:
     return abs(a) < 1e-30
   return abs(a - b) / abs(b) < rtol
@@ -358,12 +425,27 @@ def _close(a, b, rtol=1e-3):
 
 def make_tests():
   """
-  Return list of (binary_file, ascii_file, case_name, list_of_(desc, fn)).
+  Build the verification test matrix for binary and ASCII HSPICE outputs.
+  
+  Returns:
+  	tests (list[tuple[str, str | None, str, callable]]): Test cases as
+  		(binary file name, ASCII reference file name or None, case name,
+  		assertion function).
   """
   tests = []
 
   # Helper: look up variable by partial name match (handles 'v(node_a' without closing paren)
   def find_var(table, partial):
+    """
+    Find the first table key that matches a name prefix or exact name.
+    
+    Parameters:
+        table: Mapping of variable names to values.
+        partial: Key prefix or full key name to search for.
+    
+    Returns:
+        The first matching key, or None if no key matches.
+    """
     for k in table:
       if k.startswith(partial) or k == partial:
         return k
@@ -410,6 +492,16 @@ def make_tests():
   # NOT a secondary outer sweep. Produces 1 table with 5 rows.
   # ------------------------------------------------------------------
   def dc_sweep_temp_assertions(tables, meta):
+    """
+    Validate a DC temperature sweep table.
+    
+    Parameters:
+        tables: Parsed sweep tables.
+        meta: Parsed file metadata.
+    
+    Returns:
+        list[str]: Assertion error messages, or an empty list when the temperature sweep matches the expected shape and values.
+    """
     errs = []
     if len(tables) != 1:
       errs.append(f"Expected 1 table (temp is primary .dc axis), got {len(tables)}")
@@ -440,6 +532,16 @@ def make_tests():
   # NOT a secondary outer sweep. Produces 1 table with 5 rows.
   # ------------------------------------------------------------------
   def dc_sweep_param_assertions(tables, meta):
+    """
+    Validate a one-dimensional DC sweep table for the primary sweep parameter.
+    
+    Parameters:
+    	tables: Parsed sweep tables to inspect.
+    	meta: Parsed file metadata used to identify the sweep axis.
+    
+    Returns:
+    	errs (list[str]): Validation error messages, or an empty list when the table matches the expected sweep shape and values.
+    """
     errs = []
     if len(tables) != 1:
       errs.append(f"Expected 1 table (rval is primary .dc axis), got {len(tables)}")
@@ -469,6 +571,12 @@ def make_tests():
   # DC MONTE — 5 Monte Carlo runs, 5 data points each (v1 1..5 step 1)
   # ------------------------------------------------------------------
   def dc_monte_assertions(tables, meta):
+    """
+    Validate the Monte Carlo DC sweep tables.
+    
+    Returns:
+    	errs (list[str]): Assertion error messages for any mismatches, or an empty list when the tables match the expected structure.
+    """
     errs = []
     if len(tables) != 5:
       errs.append(f"Expected 5 Monte Carlo tables, got {len(tables)}")
@@ -535,6 +643,12 @@ def make_tests():
   # AC SWEEP PARAM — 3 sweep points for rval (10, 20, 30)
   # ------------------------------------------------------------------
   def ac_sweep_param_assertions(tables, meta):
+    """
+    Validate AC parameter sweep tables.
+    
+    Returns:
+    	list[str]: Assertion error messages, or an empty list when the tables match the expected sweep values and frequency-point count.
+    """
     errs = []
     if len(tables) != 3:
       errs.append(f"Expected 3 sweep tables, got {len(tables)}")
@@ -563,6 +677,16 @@ def make_tests():
   # TRAN BASIC — no sweep, time 0..20ns step 1ns
   # ------------------------------------------------------------------
   def tran_basic_assertions(tables, meta):
+    """
+    Validate a basic transient sweep table.
+    
+    Parameters:
+    	tables (list): Parsed sweep tables for the transient result.
+    	meta (dict): Parsed metadata for the result file.
+    
+    Returns:
+    	list: Assertion error messages, or an empty list if the table matches the expected transient shape and values.
+    """
     errs = []
     if len(tables) != 1:
       errs.append(f"Expected 1 table, got {len(tables)}")
@@ -601,6 +725,16 @@ def make_tests():
   # TRAN SWEEP TEMP — 5 temperature sweep points
   # ------------------------------------------------------------------
   def tran_sweep_temp_assertions(tables, meta):
+    """
+    Assert the temperature sweep tables contain the expected sweep values.
+    
+    Parameters:
+    	tables: Parsed sweep tables to verify.
+    	meta: Parsed file metadata.
+    
+    Returns:
+    	list[str]: Assertion error messages, or an empty list when the tables match the expected temperature sweep.
+    """
     errs = []
     if len(tables) != 5:
       errs.append(f"Expected 5 tables, got {len(tables)}")
@@ -626,6 +760,12 @@ def make_tests():
   # TRAN SWEEP PARAM — rval 10..30 step 10, 3 tables
   # ------------------------------------------------------------------
   def tran_sweep_param_assertions(tables, meta):
+    """
+    Validate transient sweep tables against expected sweep values.
+    
+    Returns:
+    	list[str]: Assertion errors for tables that do not match the expected count or sweep values.
+    """
     errs = []
     if len(tables) != 3:
       errs.append(f"Expected 3 tables, got {len(tables)}")
@@ -651,6 +791,12 @@ def make_tests():
   # TRAN SWEEP SOURCE — v2 sweep 1..3 step 1, 3 tables
   # ------------------------------------------------------------------
   def tran_sweep_source_assertions(tables, meta):
+    """
+    Validate a transient sweep-source result against expected sweep values.
+    
+    Returns:
+    	list[str]: A list of assertion error messages.
+    """
     errs = []
     if len(tables) != 3:
       errs.append(f"Expected 3 tables, got {len(tables)}")
@@ -747,6 +893,16 @@ def make_tests():
   # AC PROBES ONLY — v(node_a), v(node_b), differential, i(v1), i(r1)
   # ------------------------------------------------------------------
   def ac_probes_only_assertions(tables, meta):
+    """
+    Assert that an AC result contains one table and complex probe values.
+    
+    Parameters:
+    	tables: Parsed sweep tables.
+    	meta: Parsed file metadata.
+    
+    Returns:
+    	list[str]: Assertion error messages, or an empty list if the table matches expectations.
+    """
     errs = []
     if len(tables) != 1:
       errs.append(f"Expected 1 table, got {len(tables)}")
@@ -776,6 +932,16 @@ def make_tests():
   # DC NESTED SWEEP — v1 1..5 sweep rval 10..30, 3 outer sweep tables
   # ------------------------------------------------------------------
   def dc_nested_sweep_assertions(tables, meta):
+    """
+    Validate the result tables for a nested DC sweep case.
+    
+    Parameters:
+    	tables: Parsed sweep tables.
+    	meta: Parsed file metadata.
+    
+    Returns:
+    	list[str]: Assertion error messages for any mismatches, or an empty list if the tables match the expected nested sweep layout.
+    """
     errs = []
     if len(tables) != 3:
       errs.append(f"Expected 3 outer sweep tables (rval), got {len(tables)}")
@@ -802,6 +968,11 @@ def make_tests():
   # OP BASIC
   # ------------------------------------------------------------------
   def op_basic_assertions(tables, meta):
+    """
+    Validate the basic operating-point results.
+    
+    Returns a list of assertion failures describing missing variables or unexpected values.
+    """
     errs = []
     if len(tables) != 1:
       errs.append(f"Expected 1 table, got {len(tables)}")
@@ -830,6 +1001,12 @@ def make_tests():
   # OP WITH PROBES
   # ------------------------------------------------------------------
   def op_with_probes_assertions(tables, meta):
+    """
+    Validate operating-point probe values.
+    
+    Returns:
+    	errs (list[str]): Error messages for any mismatched table count or probe values.
+    """
     errs = []
     if len(tables) != 1:
       errs.append(f"Expected 1 table, got {len(tables)}")
@@ -905,6 +1082,12 @@ def make_tests():
   # TRAN MEASUREMENT
   # ------------------------------------------------------------------
   def tran_meas_assertions(tables, meta):
+    """
+    Check the transient measurement output for the expected maximum output value.
+    
+    Returns:
+    	errs (list[str]): Validation error messages, or an empty list when the measurement is present and matches the expected value.
+    """
     errs = []
     meas = meta.get("measurements", {})
     if "v_out_max" not in meas:
@@ -950,6 +1133,12 @@ def make_tests():
   # AC MEASUREMENT SWEEP
   # ------------------------------------------------------------------
   def ac_meas_sweep_assertions(tables, meta):
+    """
+    Validate AC measurement sweep results for the V(out) at 1 kHz measurement.
+    
+    Returns:
+    	errs (list[str]): A list of assertion failure messages.
+    """
     errs = []
     meas = meta.get("measurements", {})
     if "v_out_at_1k" not in meas:
@@ -973,6 +1162,15 @@ def make_tests():
   # TRAN MEASUREMENT SWEEP
   # ------------------------------------------------------------------
   def tran_meas_sweep_assertions(tables, meta):
+    """
+    Validate transient sweep measurement results.
+    
+    Parameters:
+    	meta (dict): Parsed metadata containing measurement values.
+    
+    Returns:
+    	list[str]: Error messages for any failed checks.
+    """
     errs = []
     meas = meta.get("measurements", {})
     if "v_out_max" not in meas:
@@ -1000,6 +1198,9 @@ def make_tests():
 # ---------------------------------------------------------------------------
 
 def main():
+  """
+  Run the HSPICE type verification test suite and write a log file.
+  """
   logs_dir = "logs"
   os.makedirs(logs_dir, exist_ok=True)
   log_path = os.path.join(logs_dir, "verify_all_types.log")

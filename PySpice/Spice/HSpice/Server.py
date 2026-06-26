@@ -13,6 +13,15 @@ _module_logger = logging.getLogger(__name__)
 
 
 def parse_spice_value(val_str):
+    """
+    Parse a SPICE numeric value with an optional scale suffix.
+    
+    Parameters:
+    	val_str (str): The value string to parse.
+    
+    Returns:
+    	float: The parsed numeric value.
+    """
     val_str = val_str.strip().lower()
     if val_str.endswith("f"):
         return float(val_str[:-1]) * 1e-15
@@ -42,9 +51,13 @@ def parse_spice_value(val_str):
 
 def acquire_hspice_lock(limit):
     """
-    Acquire one of the slot locks (0 to limit-1) using fcntl.flock.
-    Returns (lock_file_descriptor, slot_index).
-    Blocks until a slot becomes available.
+    Acquire an available HSPICE concurrency slot.
+    
+    Parameters:
+    	limit (int): The number of lock slots to manage.
+    
+    Returns:
+    	tuple[int, int]: The acquired file descriptor and its slot index.
     """
     lock_dir = "/tmp/pyspice_hspice_locks"
     os.makedirs(lock_dir, exist_ok=True)
@@ -73,6 +86,17 @@ class HSpiceServer:
     SPICE_COMMAND = "hspice"
 
     def __init__(self, **kwargs):
+        """
+        Initialize the HSPICE server configuration.
+        
+        Parameters:
+        	spice_command (str, optional): Command used to launch HSPICE.
+        	concurrency_limit (int, optional): Maximum number of simulations that may run at once.
+        	timeout (float, optional): Maximum number of seconds to wait for a simulation.
+        
+        Raises:
+        	ValueError: If concurrency_limit is less than 1.
+        """
         self._spice_command = kwargs.get("spice_command") or self.SPICE_COMMAND
         concurrency_limit = kwargs.get("concurrency_limit")
         if concurrency_limit is None:
@@ -91,6 +115,19 @@ class HSpiceServer:
         self._timeout = float(timeout)
 
     def __call__(self, spice_input):
+        """
+        Run an HSPICE simulation and parse its outputs.
+        
+        Parameters:
+        	spice_input: SPICE netlist text to simulate.
+        
+        Returns:
+        	HSpiceRawFile: Parsed simulation data, including waveform data, operating-point values, and measurement results when available.
+        
+        Raises:
+        	TimeoutError: If the HSPICE process exceeds the configured timeout.
+        	NameError: If HSPICE reports an error, exits with a failure code, or produces no parseable output.
+        """
         logger = _module_logger.getChild("HSpiceServer")
         logger.info("Running HSPICE simulation")
 

@@ -7,6 +7,15 @@ import traceback
 WORK_DIR = "work"
 
 def parse_header_payload(payload):
+  """
+  Parse metadata from an HSPICE header payload.
+  
+  Raises:
+      ValueError: If the payload is too short, the version cannot be identified, or the numeric header fields cannot be parsed.
+  
+  Returns:
+      dict: A metadata dictionary containing the format version, legacy flag, variable and sweep counts, sweep size, vector count, title, date, variable type codes, and variable names.
+  """
   clean = payload.decode("ascii", errors="ignore")
 
   if len(clean) < 24:
@@ -85,7 +94,12 @@ def parse_header_payload(payload):
 
 
 def read_block(f, fmt):
-  """Read one block (head + payload + tail). Returns (payload_bytes, is_term_block) or None on EOF."""
+  """
+  Read a binary block from a file.
+  
+  Returns:
+  	tuple[bytes, int] | tuple[None, bool]: The block payload and its payload size, or `(None, False)` at end of file.
+  """
   head_raw = f.read(16)
   if len(head_raw) == 0:
     return None, False  # clean EOF
@@ -112,11 +126,15 @@ def read_block(f, fmt):
 
 def is_term_block(payload, version, fmt):
   """
-  Termination detection rule (from C source and observed binary layout):
-  - 2013: a dedicated block whose entire payload is an 8-byte double == 1e30.
-           Also accepted if the last 8 bytes of a larger payload are > 9e29.
-  - 2001: a dedicated block whose entire payload is an 8-byte double == 1e30.
-  - 9601/9007 (legacy): a dedicated block whose entire payload is a 4-byte float == 1e30.
+  Detect whether a payload is a termination block.
+  
+  Parameters:
+  	payload (bytes): Block payload to inspect.
+  	version (str): HSPICE format version.
+  	fmt (str): Endianness marker used to unpack numeric values.
+  
+  Returns:
+  	bool: ``True`` if the payload matches the termination-block pattern, ``False`` otherwise.
   """
   size = len(payload)
   if version in ("2013", "2001"):
@@ -137,6 +155,15 @@ def is_term_block(payload, version, fmt):
 
 
 def row_sizes_for(meta):
+  """
+  Compute the byte size of each vector in a data row.
+  
+  Parameters:
+  	meta (dict): Parsed header metadata containing the file version, vector count, and variable type information.
+  
+  Returns:
+  	tuple[list[int], int, bool]: A list of per-vector byte sizes, the total row size in bytes, and whether the row uses complex values.
+  """
   version    = meta["version"]
   is_complex = meta["num_vectors"] > 1 and meta["var_types"][0] == 2
 
@@ -164,7 +191,21 @@ def row_sizes_for(meta):
 
 
 def parse_row(raw, offset, meta, var_sizes, is_complex, fmt):
-  """Parse one data row starting at `offset`, return (scale_val, circuit_vals)."""
+  """
+  Parse a binary data row into the scale value and circuit values.
+  
+  Parameters:
+  	raw: The raw table bytes.
+  	offset: The starting position of the row within ``raw``.
+  	meta: Header metadata for the file.
+  	var_sizes: Byte size for each vector in the row.
+  	is_complex: Whether circuit vectors are stored as complex values.
+  	fmt: Endianness marker for binary unpacking.
+  
+  Returns:
+  	scale_val (float): The parsed scale value.
+  	circuit_vals (list): The parsed circuit values.
+  """
   version  = meta["version"]
   row      = raw[offset:]
   c_offset = 0
@@ -192,6 +233,15 @@ def parse_row(raw, offset, meta, var_sizes, is_complex, fmt):
 
 
 def parse_spice_value(val_str):
+  """
+  Parse a SPICE value string into a numeric value.
+  
+  Parameters:
+  	val_str (str): Value string with an optional SPICE scale suffix.
+  
+  Returns:
+  	float: The parsed numeric value.
+  """
   val_str = val_str.strip().lower()
   if val_str.endswith("f"):
     return float(val_str[:-1]) * 1e-15
@@ -220,6 +270,15 @@ def parse_spice_value(val_str):
 
 
 def verify_op_file(filename, log):
+  """
+  Verify expected node voltages, branch currents, and measurement files for an operating-point result.
+  
+  Parameters:
+  	filename (str): Path to the `.ic0` file to verify.
+  
+  Returns:
+  	bool: `true` if all expected values and related measurement files match, `false` otherwise.
+  """
   log(f"\n{'='*70}")
   log(f"VERIFYING OPERATING POINT FILE: {filename}")
   log(f"{'='*70}")
@@ -304,6 +363,17 @@ def verify_op_file(filename, log):
 
   # Verify values
   def is_close(a, b, tol=1e-3):
+    """
+    Determine whether two numeric values are within a given tolerance.
+    
+    Parameters:
+    	a: First value to compare.
+    	b: Second value to compare.
+    	tol: Maximum allowed absolute difference.
+    
+    Returns:
+    	`true` if the absolute difference between `a` and `b` is less than `tol`, `false` otherwise.
+    """
     return abs(a - b) < tol
 
   if "op_basic" in filename:
@@ -340,6 +410,12 @@ def verify_op_file(filename, log):
 
 
 def parse_meas_file(filepath):
+  """
+  Parse measurement values from a SPICE measurement file.
+  
+  Returns:
+  	dict | None: A dictionary mapping measurement names to parsed values, or lists of values for sweep results; `None` if the file does not exist or does not contain enough data.
+  """
   if not os.path.exists(filepath):
     return None
   with open(filepath, "r", errors="ignore") as f:
@@ -375,6 +451,16 @@ def parse_meas_file(filepath):
 
 
 def verify_meas_file(filename, log):
+  """
+  Verify expected measurement values for matching HSPICE measurement files.
+  
+  Checks available `.ms0`, `.mt0`, and `.ma0` files for the given output name and validates
+  known scalar or swept measurement values against expected results.
+  
+  Returns:
+  	True if all parsed measurement files match their expected values or no applicable file exists,
+  	False otherwise.
+  """
   def is_close(a, b, tol=1e-3):
     return abs(a - b) < tol
 
@@ -419,6 +505,12 @@ def verify_meas_file(filename, log):
 
 
 def verify_file(filename, log):
+  """
+  Verify an HSPICE output file and its associated measurement data.
+  
+  Returns:
+  	result (bool): `true` if the file and any applicable checks pass, `false` otherwise.
+  """
   log(f"\n{'='*70}")
   log(f"VERIFYING: {filename}")
   log(f"{'='*70}")
@@ -585,6 +677,11 @@ def verify_file(filename, log):
 
 
 def main():
+  """
+  Run verification for HSPICE binary specification files in the work directory.
+  
+  Creates a log file under logs/, checks each matching binary file with the verifier, and exits with a status code that reflects the overall result.
+  """
   logs_dir = "logs"
   os.makedirs(logs_dir, exist_ok=True)
 
@@ -593,6 +690,12 @@ def main():
 
   with open(log_path, "w") as lf:
     def log(msg):
+      """
+      Write a message to standard output and the log file.
+      
+      Parameters:
+      	msg (str): Message to write.
+      """
       print(msg)
       lf.write(msg + "\n")
       lf.flush()
