@@ -37,6 +37,37 @@
 #include "numpy/npy_math.h"
 #include <errno.h>
 #include <limits.h>
+#include <stdarg.h>
+#include <stdio.h>
+
+
+static void c_log(const char *level, const char *format, ...) {
+  if (HSpiceParseLogger == NULL || HSpiceParseLogger == Py_None) {
+    return;
+  }
+  char buf[1024];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(buf, sizeof(buf), format, args);
+  va_end(args);
+
+  char prefixed_buf[1100];
+  snprintf(prefixed_buf, sizeof(prefixed_buf), "[HSpiceRead] %s", buf);
+
+  PyObject *res = PyObject_CallMethod(HSpiceParseLogger, level, "s", prefixed_buf);
+  Py_XDECREF(res);
+}
+
+static void module_free(void *self) {
+  Py_XDECREF(HSpiceParseLogger);
+  HSpiceParseLogger = NULL;
+  Py_XDECREF(HSpiceParseError);
+  HSpiceParseError = NULL;
+}
+
+#define LOG_INFO(...) c_log("info", __VA_ARGS__)
+#define LOG_DEBUG(...) c_log("debug", __VA_ARGS__)
+#define LOG_WARNING(...) c_log("warning", __VA_ARGS__)
 
 // Methods table
 static PyMethodDef module_methods[] = {
@@ -56,7 +87,7 @@ static struct PyModuleDef module = {
     NULL, /* Slots for multi phase initialization */
     NULL, /* Traversal function for GC */
     NULL, /* Clear function for clearing the module */
-    NULL, /* Function for deallocating the module */
+    module_free, /* Function for deallocating the module */
 };
 
 /* Module initialization
@@ -69,6 +100,21 @@ PyMODINIT_FUNC PyInit__hspice_read() {
 
   if (m == NULL)
     return NULL;
+
+  HSpiceParseLogger = NULL;
+  PyObject *logging_module = PyImport_ImportModule("logging");
+  if (logging_module != NULL) {
+    HSpiceParseLogger = PyObject_CallMethod(
+        logging_module, "getLogger", "s", "PySpice.Spice.HSpice.hspicefile");
+    Py_DECREF(logging_module);
+    if (HSpiceParseLogger == NULL) {
+      Py_DECREF(m);
+      return NULL;
+    }
+  } else {
+    // If logging package is missing or cannot be imported, clear the exception and proceed silently
+    PyErr_Clear();
+  }
 
   // Initialize exceptions
   HSpiceParseError =
@@ -88,8 +134,6 @@ PyMODINIT_FUNC PyInit__hspice_read() {
 
   return m;
 }
-
-#define debugFile stdout
 
 // Header character positions
 #define blockHeaderSize 4
@@ -179,10 +223,8 @@ int readBlockHeader(struct ParserContext *ctx, int *blockHeader, int size) {
   }
   blockHeader[0] = blockHeader[blockHeaderSize - 1] / size;
 
-  if (ctx->debugMode >= 2) {
-    fprintf(debugFile, "Got block header, size=%d, bytes=%d, swap=%d\n",
+  LOG_DEBUG("Got block header, size=%d, bytes=%d, swap=%d",
             blockHeader[1], blockHeader[3], ctx->swap);
-  }
   return 0;
 }
 
@@ -209,10 +251,8 @@ int readBlockData(struct ParserContext *ctx, void *ptr, int *offset,
   if (ctx->swap) {
     do_swap((char *)ptr, numOfItems, itemSize); // Endian swap.
   }
-  if (ctx->debugMode >= 2) {
-    fprintf(debugFile, "Got block data, item_size=%d, count=%d, bytes=%d\n",
+  LOG_DEBUG("Got block data, item_size=%d, count=%d, bytes=%d",
             itemSize, numOfItems, itemSize * numOfItems);
-  }
   return 0;
 }
 
@@ -240,11 +280,8 @@ int readBlockTrailer(struct ParserContext *ctx, int header) {
     PyErr_Format(HSpiceParseError, "Block header and trailer mismatch.");
     return -1; // Error.
   }
-  if (ctx->debugMode >= 2) {
-    fprintf(debugFile,
-            "Got block trailer, itemsize=%ld, count=%d, bytes=%ld,\n",
+  LOG_DEBUG("Got block trailer, itemsize=%ld, count=%d, bytes=%ld",
             sizeof(int), 1, sizeof(int) * 1);
-  }
 
   return 0;
 }
@@ -253,10 +290,9 @@ int readBlockTrailer(struct ParserContext *ctx, int header) {
 // 	 NULL    ... reallocation failed
 //   pointer ... address of reallocated space
 // Arguments:
-//   debugMode   ... debug messages flag
 //   ptr         ... pointer to already allocated space
 //   size        ... new size in bytes
-void *reallocate(int debugMode, void *ptr, int size) {
+void *reallocate(void *ptr, int size) {
   // Allocate space for raw data.
   void *tmp = PyMem_Realloc(ptr, size);
   if (tmp == NULL) {
@@ -279,9 +315,7 @@ int readHeaderBlock(struct ParserContext *ctx, char **buf, int *bufOffset) {
   int error;
   int blockHeader[blockHeaderSize];
 
-  if (ctx->debugMode >= 2) {
-    fprintf(debugFile, "Reading header block @0x%lx\n", ftell(ctx->f));
-  }
+  LOG_DEBUG("Reading header block @0x%lx", ftell(ctx->f));
 
   // Get size of file header block.
   error = readBlockHeader(ctx, blockHeader, sizeof(char));
@@ -294,7 +328,7 @@ int readHeaderBlock(struct ParserContext *ctx, char **buf, int *bufOffset) {
     PyErr_Format(HSpiceParseError, "Buffer offset overflow.");
     return -1;
   }
-  tmpBuf = reallocate(ctx->debugMode, *buf,
+  tmpBuf = reallocate(*buf,
                       (*bufOffset + blockHeader[0] + 1) * sizeof(char));
   if (tmpBuf == NULL) {
     return -1; // Error.
@@ -351,38 +385,84 @@ static int parse_int(const char *str, int *out_val) {
 //   -1 ... error occurred
 //   0 ... performed normally
 // Arguments:
-//   debugMode   ... debug messages flag
 //   sweep       ... acquired sweep parameter name, new reference created
 //   buf         ... header string
 //   sweepSize   ... acquired number of sweep points
 //   sweepValues ... sweep points array, new reference created
 //   faSweep     ... pointer to fast access structure for sweep array
-int getSweepInfo(int debugMode, PyObject **sweep, char *buf, int *sweepSize,
-                 PyArrayObject **sweepValues, struct FastArray *faSweep) {
+int getSweepInfo(PyObject **sweep, char *buf, int *sweepSize,
+                 PyArrayObject **sweepValues, struct FastArray *faSweep, int num) {
   char *sweepName = NULL;
   npy_intp dims;
 
-  if (debugMode >= 2) {
-    fprintf(debugFile, "Reading sweep information.\n");
-  }
+  LOG_DEBUG("Reading sweep information.");
 
   sweepName = strtok(NULL, " \t\n"); // Get sweep parameter name.
   if (sweepName == NULL) {
     PyErr_Format(HSpiceParseError, "Failed to extract sweep name.");
     return -1;
   }
-  *sweep = PyUnicode_InternFromString(sweepName);
-  if (*sweep == NULL) {
-    PyErr_Format(HSpiceParseError, "Failed to create sweep name string.");
-    return -1;
+
+  if (num == 1) {
+    *sweep = PyUnicode_InternFromString(sweepName);
+    if (*sweep == NULL) {
+      PyErr_Format(HSpiceParseError, "Failed to create sweep name string.");
+      return -1;
+    }
+  } else {
+    *sweep = PyTuple_New(num);
+    if (*sweep == NULL) {
+      PyErr_Format(HSpiceParseError, "Failed to create sweep names tuple.");
+      return -1;
+    }
+    PyObject *first_name = PyUnicode_InternFromString(sweepName);
+    if (first_name == NULL) {
+      Py_DECREF(*sweep);
+      return -1;
+    }
+    PyTuple_SET_ITEM(*sweep, 0, first_name);
+    for (int s = 1; s < num; s++) {
+      char *nextSweepName = strtok(NULL, " \t\n");
+      if (nextSweepName == NULL) {
+        Py_DECREF(*sweep);
+        PyErr_Format(HSpiceParseError, "Failed to extract nested sweep name.");
+        return -1;
+      }
+      PyObject *next_name = PyUnicode_InternFromString(nextSweepName);
+      if (next_name == NULL) {
+        Py_DECREF(*sweep);
+        return -1;
+      }
+      PyTuple_SET_ITEM(*sweep, s, next_name);
+    }
   }
 
-  // Get number of sweep points.
-  if (parse_int(&buf[sweepSizePosition], sweepSize) < 0 || *sweepSize <= 0) {
+  // Get number of sweep points by dynamically scanning backwards from the start
+  // of the variable description block (index 256) to find the sweepSize token.
+  int pos = vectorDescriptionStartPosition - 1;
+  while (pos >= 0 && (buf[pos] == ' ' || buf[pos] == '\t' || buf[pos] == '\n' || buf[pos] == '\r')) {
+    pos--;
+  }
+  if (pos < 0) {
+    PyErr_Format(HSpiceParseError, "Failed to find sweep size token.");
+    return -1;
+  }
+  int end_pos = pos + 1;
+  while (pos >= 0 && !(buf[pos] == ' ' || buf[pos] == '\t' || buf[pos] == '\n' || buf[pos] == '\r')) {
+    pos--;
+  }
+  int start_pos = pos + 1;
+
+  char save_char = buf[end_pos];
+  buf[end_pos] = '\0';
+
+  if (parse_int(&buf[start_pos], sweepSize) < 0 || *sweepSize <= 0) {
+    buf[end_pos] = save_char;
     PyErr_Format(HSpiceParseError,
                  "Failed to parse sweep size as a positive integer.");
     return -1;
   }
+  buf[end_pos] = save_char;
 
   // Create array for sweep parameter values.
   dims = *sweepSize;
@@ -419,9 +499,7 @@ int readDataBlock(struct ParserContext *ctx, float **rawData,
   float *tmpRawData;
   double lastVal;
 
-  if (ctx->debugMode >= 2) {
-    fprintf(debugFile, "Reading data block @0x%lx\n", ftell(ctx->f));
-  }
+  LOG_DEBUG("Reading data block @0x%lx", ftell(ctx->f));
 
   // Get size of raw data block.
   error = readBlockHeader(ctx, blockHeader, sizeof(float));
@@ -436,7 +514,7 @@ int readDataBlock(struct ParserContext *ctx, float **rawData,
     PyErr_Format(HSpiceParseError, "Raw data offset overflow.");
     return -1;
   }
-  tmpRawData = reallocate(ctx->debugMode, *rawData,
+  tmpRawData = reallocate(*rawData,
                           (*rawDataOffset + blockHeader[0]) * sizeof(float));
   if (tmpRawData == NULL) {
     return -1; // Error.
@@ -493,7 +571,7 @@ int readTable(struct ParserContext *ctx, PyObject *sweep, int numOfVariables,
               int type, int numOfVectors, int *varSizes,
               struct FastArray *faSweep, PyArrayObject **tmpArray,
               struct FastArray *faPtr, char *scale, char **name,
-              PyObject *dataList) {
+              PyObject *dataList, int numSweeps) {
   int i, j, num, offset = 0, numOfColumns = numOfVectors, rowSize = 0,
                  tableBytes = 0, dataBytes = 0;
   int varSize;
@@ -506,9 +584,7 @@ int readTable(struct ParserContext *ctx, PyObject *sweep, int numOfVariables,
   struct FastArray *faPos;
   int sweepHeaderSize = 0;
 
-  if (ctx->debugMode >= 2) {
-    fprintf(debugFile, "Reading table for one sweep point.\n");
-  }
+  LOG_DEBUG("Reading table for one sweep point.");
 
   // 1. Read raw data blocks via stream control
   do {
@@ -552,12 +628,16 @@ int readTable(struct ParserContext *ctx, PyObject *sweep, int numOfVariables,
 
   // 3. Clean and parse the dynamic Sweep Value Header (Specification §4.2)
   dataBytes = tableBytes;
+  int k_found = 0;
   if (sweep != NULL) {
-    if (ctx->format == HSPICE_FORMAT_2001) {
-      sweepHeaderSize = 8; // 2001 format stores sweep value as an 8-byte double
-    } else {
-      sweepHeaderSize = 4; // 2013, 9601, 9007 store it as a 4-byte float
+    int val_size = (ctx->format == HSPICE_FORMAT_2001) ? 8 : 4;
+    for (int k = 0; k <= numSweeps; k++) {
+      if ((tableBytes - k * val_size) % rowSize == 0) {
+        k_found = k;
+        break;
+      }
     }
+    sweepHeaderSize = k_found * val_size;
     dataBytes -= sweepHeaderSize;
   }
 
@@ -565,7 +645,7 @@ int readTable(struct ParserContext *ctx, PyObject *sweep, int numOfVariables,
   num = dataBytes / rowSize;
 
   // Process and record the parameter sweep coordinate if applicable
-  if (sweep != NULL) {
+  if (sweep != NULL && k_found > 0) {
     if (ctx->format == HSPICE_FORMAT_2001) {
       memcpy(&dSweepVal, bytePtr, 8);
       if (ctx->swap) {
@@ -597,9 +677,7 @@ int readTable(struct ParserContext *ctx, PyObject *sweep, int numOfVariables,
       tmpArray[i] = (PyArrayObject *)PyArray_SimpleNew(1, &dims, NPY_DOUBLE);
     }
     if (tmpArray[i] == NULL) {
-      if (ctx->debugMode) {
-        fprintf(debugFile, "HSpiceRead: failed to create array.\n");
-      }
+      LOG_WARNING("Failed to create array");
       for (j = 0; j < i + 1; j++) {
         Py_XDECREF(tmpArray[j]);
       }
@@ -739,9 +817,7 @@ int readTable(struct ParserContext *ctx, PyObject *sweep, int numOfVariables,
   Py_XDECREF(data);
   data = NULL;
 
-  if (ctx->debugMode >= 2) {
-    fprintf(debugFile, "Finished reading one sweep point.\n");
-  }
+  LOG_DEBUG("Finished reading one sweep point.");
 
   return 0;
 
@@ -762,7 +838,7 @@ readTableFailed:
 static PyObject *HSpiceRead(PyObject *self, PyObject *args) {
   const char *fileName;
   char *token, *buf = NULL, **name = NULL;
-  int debugMode, num, numOfVectors, numOfVariables, type,
+  int num, numOfVectors, numOfVariables, type,
       sweepSize = 1, i = dateStartPosition - 1, offset = 0;
   int parsedProbes;
   struct FastArray faSweep, *faPtr = NULL;
@@ -775,13 +851,11 @@ static PyObject *HSpiceRead(PyObject *self, PyObject *args) {
   HSpiceFormat parsedFormat = HSPICE_FORMAT_UNKNOWN;
 
   // Get hspice_read() arguments.
-  if (!PyArg_ParseTuple(args, "si", &fileName, &debugMode)) {
+  if (!PyArg_ParseTuple(args, "si", &fileName)) {
     return NULL;
   }
 
-  if (debugMode) {
-    fprintf(debugFile, "HSpiceRead: reading file %s.\n", fileName);
-  }
+  LOG_DEBUG("reading file %s.", fileName);
 
   ctx.f = fopen(fileName, "rb"); // Open the file.
   if (ctx.f == NULL) {
@@ -789,7 +863,6 @@ static PyObject *HSpiceRead(PyObject *self, PyObject *args) {
     goto failed;
   }
   ctx.fileName = fileName;
-  ctx.debugMode = debugMode;
   ctx.format = HSPICE_FORMAT_2013;
   ctx.swap = 0;
 
@@ -844,6 +917,13 @@ static PyObject *HSpiceRead(PyObject *self, PyObject *args) {
     parsedFormat = HSPICE_FORMAT_9007;
   }
 
+  LOG_DEBUG("Detected format version: %s, endianness: %s",
+            (parsedFormat == HSPICE_FORMAT_2013) ? "2013" :
+            (parsedFormat == HSPICE_FORMAT_2001) ? "2001" :
+            (parsedFormat == HSPICE_FORMAT_9601) ? "9601" :
+            (parsedFormat == HSPICE_FORMAT_9007) ? "9007" : "unknown",
+            ctx.swap ? "swap-needed" : "native");
+
   // If it doesn't match any of the spec definitions, throw a ValueError
   if (parsedFormat == HSPICE_FORMAT_UNKNOWN) {
     // Extract a snapshot of what was actually there for debugging
@@ -885,8 +965,8 @@ static PyObject *HSpiceRead(PyObject *self, PyObject *args) {
                  "Failed to parse number of sweeps as valid integer.");
     goto failed;
   }
-  if (num < 0 || num > 1) {
-    PyErr_Format(PyExc_ValueError, "Only single dimension sweeps supported.");
+  if (num < 0) {
+    PyErr_Format(PyExc_ValueError, "Invalid number of sweeps.");
     goto failed;
   }
 
@@ -904,15 +984,13 @@ static PyObject *HSpiceRead(PyObject *self, PyObject *args) {
   }
   if (parsedProbes < 0 || numOfVariables <= 0 ||
       parsedProbes > INT_MAX - numOfVariables) {
-    if (debugMode) {
-      fprintf(debugFile,
-              "HSpiceRead: invalid probe or variable counts (probes=%d, "
-              "variables=%d).\n",
-              parsedProbes, numOfVariables);
-    }
+    LOG_WARNING("Invalid probe or variable counts (probes=%d, variables=%d).",
+                parsedProbes, numOfVariables);
     goto failed;
   }
   numOfVectors = parsedProbes + numOfVariables;
+  LOG_INFO("Parsing file '%s' (variables=%d, probes=%d, sweeps=%d)",
+           fileName, numOfVariables, parsedProbes, num);
   if (numOfVectors > INT_MAX / (int)sizeof(PyArrayObject *)) {
     PyErr_Format(PyExc_ValueError, "Total number of vectors is too large.");
 
@@ -1011,10 +1089,8 @@ static PyObject *HSpiceRead(PyObject *self, PyObject *args) {
         varSizes[i] = 4;
       }
     }
-    if (debugMode >= 2) {
-      fprintf(debugFile, "Vector %d: type=%d, size=%d\n", i, varTypes[i],
+    LOG_DEBUG("Vector %d: type=%d, size=%d", i, varTypes[i],
               varSizes[i]);
-    }
   }
 
   // Allocate space for pointers to vector names.
@@ -1061,11 +1137,11 @@ static PyObject *HSpiceRead(PyObject *self, PyObject *args) {
     }
   }
 
-  if (num == 1) // Get sweep information.
+  if (num >= 1) // Get sweep information.
   {
-    int num = getSweepInfo(debugMode, &sweep, buf, &sweepSize, &sweepValues,
-                           &faSweep);
-    if (num < 0) {
+    int ret = getSweepInfo(&sweep, buf, &sweepSize, &sweepValues,
+                           &faSweep, num);
+    if (ret < 0) {
       goto failed;
     }
   }
@@ -1094,9 +1170,9 @@ static PyObject *HSpiceRead(PyObject *self, PyObject *args) {
 
   for (i = 0; i < sweepSize; i++) // Read i-th table.
   {
-    num = readTable(&ctx, sweep, numOfVariables, type, numOfVectors, varSizes,
-                    &faSweep, tmpArray, faPtr, token, name, dataList);
-    if (num < 0) {
+    int ret = readTable(&ctx, sweep, numOfVariables, type, numOfVectors, varSizes,
+                        &faSweep, tmpArray, faPtr, token, name, dataList, num);
+    if (ret < 0) {
       goto failed;
     }
   }
@@ -1160,6 +1236,7 @@ static PyObject *HSpiceRead(PyObject *self, PyObject *args) {
   }
   Py_XDECREF(tuple);
 
+  LOG_INFO("HSpiceRead: Parsing file completed successfully.");
   return list;
 
 failed: // Error occured. Close open file, release memory and python

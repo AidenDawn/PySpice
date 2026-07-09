@@ -289,7 +289,7 @@ class HSpiceServer:
                     )
 
             logger.info(f"Reading output file: {raw_file_path}")
-            data = hspice_read(raw_file_path, debug=0)
+            data = hspice_read(raw_file_path)
             if data is None:
                 raise NameError(
                     f"Failed to parse HSPICE output file {raw_file_path} using hspice_read"

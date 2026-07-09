@@ -143,23 +143,24 @@ def is_term_block(payload, version, fmt):
 def row_sizes_for(meta):
     version = meta["version"]
     is_complex = meta["num_vectors"] > 1 and meta["var_types"][0] == 2
+    num_vars = meta["num_vars"]
 
     sizes = []
     for idx in range(meta["num_vectors"]):
         if version == "2013":
             if idx == 0:
                 s = 8  # scale: double
-            elif is_complex:
+            elif is_complex and idx < num_vars:
                 s = 8  # complex float: 4B real + 4B imag
             else:
                 s = 4  # float
         elif version == "2001":
-            if is_complex and idx > 0:
+            if is_complex and idx > 0 and idx < num_vars:
                 s = 16  # complex double: 8B real + 8B imag
             else:
                 s = 8  # double
         else:  # 9601/9007 legacy
-            if is_complex and idx > 0:
+            if is_complex and idx > 0 and idx < num_vars:
                 s = 8  # complex float: 4B real + 4B imag
             else:
                 s = 4  # float
@@ -181,7 +182,7 @@ def parse_row(raw, offset, meta, var_sizes, is_complex, fmt):
     circuit_vals = []
     for idx in range(1, meta["num_vectors"]):
         vsz = var_sizes[idx]
-        if is_complex and idx > 0:
+        if is_complex and idx > 0 and idx < meta["num_vars"]:
             if vsz == 16:
                 re, im = struct.unpack(fmt + "dd", row[c_offset : c_offset + 16])
             else:
@@ -575,20 +576,30 @@ def verify_file(filename, log):
             #   2001 format stores sweep value as 8-byte double
             #   all other formats (2013, 9601, 9007) use 4-byte float
             if meta["num_sweeps"] > 0:
+                num_sw = meta["num_sweeps"]
                 if meta["version"] == "2001":
-                    if len(t_raw) < 8:
-                        log(f"    ERROR: too short for 8-byte sweep value")
-                        return False
-                    sweep_val = struct.unpack(fmt + "d", t_raw[:8])[0]
-                    log(f"    Sweep value (double): {sweep_val:.4f}")
-                    offset += 8
+                    val_size = 8
+                    val_fmt = "d"
                 else:
-                    if len(t_raw) < 4:
-                        log(f"    ERROR: too short for 4-byte sweep value")
-                        return False
-                    sweep_val = struct.unpack(fmt + "f", t_raw[:4])[0]
-                    log(f"    Sweep value (float): {sweep_val:.4f}")
-                    offset += 4
+                    val_size = 4
+                    val_fmt = "f"
+
+                k_found = 0
+                for k in range(num_sw + 1):
+                    if (len(t_raw) - k * val_size) % row_size == 0:
+                        k_found = k
+                        break
+
+                if len(t_raw) < k_found * val_size:
+                    log(f"    ERROR: too short for {k_found} sweep values")
+                    return False
+
+                sweep_vals = []
+                for s_idx in range(k_found):
+                    s_val = struct.unpack(fmt + val_fmt, t_raw[s_idx * val_size : (s_idx + 1) * val_size])[0]
+                    sweep_vals.append(s_val)
+                log(f"    Sweep values: {sweep_vals}")
+                offset += k_found * val_size
 
             data_len = len(t_raw) - offset
 

@@ -353,6 +353,63 @@ r2 node_b 0 20.0
 .end
 """,
     },
+    "dc_data_sweep": {
+        "type": "dc",
+        "suffix": "sw0",
+        "netlist": """* DC Sweep with Data Block
+.option post=1 post_version={version}
+.param rval=10.0
+v1 node_a 0 1.0
+r1 node_a 0 rval
+.dc v1 1.0 5.0 1.0 sweep data=mydata
+.data mydata rval temp
+10.0 25
+10.0 125
+30.0 25
+30.0 125
+.enddata
+.end
+""",
+    },
+    "tran_noise": {
+        "type": "tran",
+        "suffix": "tr0",
+        "netlist": """* Transient Noise Analysis
+.option post=1 post_version={version}
+v1 node_a 0 pulse(0 1.0 0 1n 1n 10n 20n)
+r1 node_a node_b 10.0
+r2 node_b 0 20.0
+.tran 1n 20n
+.trannoise v(node_b) fmin=10k fmax=10g
+.end
+""",
+    },
+    "dc_noise": {
+        "type": "ac",
+        "suffix": "ac0",
+        "netlist": """* DC Bias Voltage AC Noise Sweep
+.option post=1 post_version={version}
+v1 node_a 0 1.0
+r1 node_a node_b 10.0
+r2 node_b 0 20.0
+.ac dec 5 100 10k sweep v1 1.0 5.0 1.0
+.noise v(node_b) v1 10
+.end
+""",
+    },
+    "noise_basic": {
+        "type": "noise",
+        "suffix": "ac0",
+        "netlist": """* Noise Basic Analysis
+.option post=1 post_version={version}
+v1 node_a 0 ac 1.0
+r1 node_a node_b 10.0
+r2 node_b 0 20.0
+.ac dec 5 100 10k
+.noise v(node_b) v1 10
+.end
+""",
+    },
 }
 
 versions = ["9007", "9601", "2001", "2013", "ascii"]

@@ -43,7 +43,6 @@ struct ParserContext {
   bool swap;
   FILE *f;
   const char *fileName;
-  int debugMode;
 };
 
 // Python callable function
@@ -51,6 +50,9 @@ static PyObject *HSpiceRead(PyObject *self, PyObject *args);
 
 // Python exceptions
 static PyObject *HSpiceParseError;
+
+// Python logger
+static PyObject *HSpiceParseLogger;
 
 #ifdef LINUX
 #define __declspec(a) extern

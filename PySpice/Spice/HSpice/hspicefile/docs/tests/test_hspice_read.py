@@ -767,9 +767,16 @@ def make_tests():
 
     def dc_meas_sweep(title, date, scale_name, sweep_name, sweep_vals, data_list):
         errs = []
+        if sweep_name is None or sweep_name.lower() != "rval":
+            errs.append(f"Expected sweep_name='rval', got '{sweep_name}'")
+        if sweep_vals is None or len(sweep_vals) != 3:
+            errs.append(f"Expected 3 sweep values, got {sweep_vals}")
+        else:
+            for i, ev in enumerate([10.0, 20.0, 30.0]):
+                if not _close(float(sweep_vals[i]), ev, rtol=1e-3):
+                    errs.append(f"sweep_vals[{i}]={sweep_vals[i]}, expected {ev}")
         if len(data_list) != 3:
             errs.append(f"Expected 3 tables, got {len(data_list)}")
-            return errs
         return errs
 
     for version in ["9601", "2001", "2013"]:
@@ -783,9 +790,16 @@ def make_tests():
 
     def ac_meas_sweep(title, date, scale_name, sweep_name, sweep_vals, data_list):
         errs = []
+        if sweep_name is None or sweep_name.lower() != "rval":
+            errs.append(f"Expected sweep_name='rval', got '{sweep_name}'")
+        if sweep_vals is None or len(sweep_vals) != 3:
+            errs.append(f"Expected 3 sweep values, got {sweep_vals}")
+        else:
+            for i, ev in enumerate([10.0, 20.0, 30.0]):
+                if not _close(float(sweep_vals[i]), ev, rtol=1e-3):
+                    errs.append(f"sweep_vals[{i}]={sweep_vals[i]}, expected {ev}")
         if len(data_list) != 3:
             errs.append(f"Expected 3 tables, got {len(data_list)}")
-            return errs
         return errs
 
     for version in ["9601", "2001", "2013"]:
@@ -799,9 +813,16 @@ def make_tests():
 
     def tran_meas_sweep(title, date, scale_name, sweep_name, sweep_vals, data_list):
         errs = []
+        if sweep_name is None or sweep_name.lower() != "rval":
+            errs.append(f"Expected sweep_name='rval', got '{sweep_name}'")
+        if sweep_vals is None or len(sweep_vals) != 3:
+            errs.append(f"Expected 3 sweep values, got {sweep_vals}")
+        else:
+            for i, ev in enumerate([10.0, 20.0, 30.0]):
+                if not _close(float(sweep_vals[i]), ev, rtol=1e-3):
+                    errs.append(f"sweep_vals[{i}]={sweep_vals[i]}, expected {ev}")
         if len(data_list) != 3:
             errs.append(f"Expected 3 tables, got {len(data_list)}")
-            return errs
         return errs
 
     for version in ["9601", "2001", "2013"]:
@@ -810,6 +831,96 @@ def make_tests():
                 f"tran_meas_sweep_{version}.tr0",
                 f"tran_meas_sweep_{version}",
                 tran_meas_sweep,
+            )
+        )
+
+    def dc_data_sweep(title, date, scale_name, sweep_name, sweep_vals, data_list):
+        errs = []
+        expected_names = ("mydata", "rval", "temp")
+        if not isinstance(sweep_name, tuple) or len(sweep_name) != 3:
+            errs.append(f"Expected sweep_name as tuple of 3, got '{sweep_name}'")
+        else:
+            for i, name in enumerate(expected_names):
+                if sweep_name[i].lower() != name:
+                    errs.append(f"Expected sweep_name[{i}]='{name}', got '{sweep_name[i]}'")
+        if sweep_vals is None or len(sweep_vals) != 4:
+            errs.append(f"Expected 4 sweep values, got {sweep_vals}")
+        else:
+            for i, ev in enumerate([10.0, 10.0, 30.0, 30.0]):
+                if not _close(float(sweep_vals[i]), ev, rtol=1e-3):
+                    errs.append(f"sweep_vals[{i}]={sweep_vals[i]}, expected {ev}")
+        if len(data_list) != 4:
+            errs.append(f"Expected 4 tables, got {len(data_list)}")
+        return errs
+
+    def noise_basic(title, date, scale_name, sweep_name, sweep_vals, data_list):
+        errs = []
+        if scale_name.lower() != "hertz":
+            errs.append(f"Expected scale_name='hertz', got '{scale_name}'")
+        if len(data_list) != 1:
+            errs.append(f"Expected 1 table, got {len(data_list)}")
+        else:
+            keys = [k.lower() for k in data_list[0].keys()]
+            if not any("noise" in k for k in keys):
+                errs.append(f"Expected noise-related variables, got keys: {keys}")
+        return errs
+
+    for version in ["9601", "2001", "2013"]:
+        tests.append(
+            (
+                f"dc_data_sweep_{version}.sw0",
+                f"dc_data_sweep_{version}",
+                dc_data_sweep,
+            )
+        )
+        tests.append(
+            (
+                f"noise_basic_{version}.ac0",
+                f"noise_basic_{version}",
+                noise_basic,
+            )
+        )
+
+    def tran_noise(title, date, scale_name, sweep_name, sweep_vals, data_list):
+        errs = []
+        if scale_name.lower() != "time":
+            errs.append(f"Expected scale_name='time', got '{scale_name}'")
+        if len(data_list) != 1:
+            errs.append(f"Expected 1 table, got {len(data_list)}")
+        else:
+            keys = [k.lower() for k in data_list[0].keys()]
+            for name in ["time", "node_b", "i(v1"]:
+                if name not in keys:
+                    errs.append(f"Expected key '{name}' in transient noise output, got keys: {keys}")
+        return errs
+
+    def dc_noise(title, date, scale_name, sweep_name, sweep_vals, data_list):
+        errs = []
+        if scale_name.lower() != "hertz":
+            errs.append(f"Expected scale_name='hertz', got '{scale_name}'")
+        if sweep_name is None or sweep_name.lower() != "0:v1":
+            errs.append(f"Expected sweep_name='0:v1', got '{sweep_name}'")
+        if len(data_list) != 5:
+            errs.append(f"Expected 5 tables, got {len(data_list)}")
+        else:
+            keys = [k.lower() for k in data_list[0].keys()]
+            if not any("noise" in k for k in keys):
+                errs.append(f"Expected noise-related variables, got keys: {keys}")
+        return errs
+
+    for version in ["9601", "2001", "2013"]:
+        tests.append(
+            (
+                f"tran_noise_{version}.tr0",
+                f"tran_noise_{version}",
+                tran_noise,
+            )
+        )
+        tests.append(
+            (
+                f"dc_noise_{version}.ac0",
+                f"dc_noise_{version}",
+                dc_noise,
             )
         )
 

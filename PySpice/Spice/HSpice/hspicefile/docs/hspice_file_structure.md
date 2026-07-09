@@ -61,10 +61,10 @@ Following the format descriptor, fixed character offsets define simulation prope
 |---|---|---|
 | `0` | `4` | Number of variables (including scale) |
 | `4` | `4` | Number of probes |
-| `8` | `4` | Number of sweep dimensions (`0` or `1`) |
+| `8` | `4` | Number of sweep dimensions (`0` or `1` for basic, > `1` for multi-parameter sweeps) |
 | `24` | `64` | Simulation title string |
 | `88` | `24` | Creation date/time string |
-| `187` | `~16` | Number of swept points (`sweepSize`); space-delimited integer. Valid for **all** format versions. |
+| `187` / `167` | `~16` | Number of swept points (`sweepSize`); space-delimited integer. Modern formats (`2001`, `2013`) place this at offset `187`, while legacy formats (`9601`, `9007`) place it at `167`. Parsers can dynamically locate it by scanning backwards from index `256` for the last non-space token. |
 | `256` | variable | Variable type codes and names (space-delimited tokens, see §3.3) |
 
 *   **Variable Types**: The physical quantity type code of each variable:
@@ -73,12 +73,15 @@ Following the format descriptor, fixed character offsets define simulation prope
     *   `3`: Parameter sweep variable (e.g., swept source voltage `VOLTS` or resistance parameter `rval`).
     *   `4`: Swept current source variable (e.g., `AMPS`).
     *   `8`: Current probe or time/scale variable.
+    *   `51`: Noise spectral density real variable (e.g., `outnoise`, `innoise`).
     *   *Note: These codes represent physical quantities, not byte sizes.*
 *   **Variable Names**: Space-separated names of the variables (e.g., `TIME`, `v(in)`, `v(out)`, `i(vinput)`).
 *   **Termination Marker**: The header block data payload ends with the characters `$&%#`.
 
 > [!NOTE]
 > **Probe vs Variable Counts**: In some HSPICE configurations (such as combined probe + parameter sweep simulations, or standard sweep simulations), all monitored vectors are counted under `numVariables` with `numProbes` set to `0`. Parsers should always compute the total number of vectors in the file as $N = \text{numVariables} + \text{numProbes}$.
+>
+> In AC analyses, only circuit **variables** (`index < numVariables`) are complex-valued (2 floats/doubles). Circuit **probes** (`index >= numVariables`), such as noise spectral densities (`type 51`), are always real-valued (1 float/double).
 
 ### 3.3 Variable Type and Name Token Layout
 Starting at payload offset `256`, the space-delimited token sequence is:
@@ -87,7 +90,7 @@ Starting at payload offset `256`, the space-delimited token sequence is:
 <type_0> <type_1> ... <type_{N-1}>  <name_0> <name_1> ... <name_{N-1}>
 ```
 
-where `N = numVariables + numProbes` (total vectors), index `0` is the scale/independent variable, and indices `1..N-1` are the circuit variables. Types and names are in strict natural index order — `type_i` always corresponds to `name_i`.
+where `N = numVariables + numProbes` (total vectors), index `0` is the scale/independent variable, and indices `1..N-1` are the circuit variables. Types and names are in strict natural index order — `type_i` always corresponds to `name_i`. Following the circuit variable names, the token list appends the names of the outer swept parameters (e.g., `rval`, `temp`).
 
 ---
 
@@ -104,8 +107,8 @@ Variable storage sizes depend on the format version and analysis type:
 | Variable | `9601` (legacy) | `2001` | `2013` |
 |---|---|---|---|
 | Scale (index 0, real) | 4-byte `float` | 8-byte `double` | 8-byte `double` |
-| Circuit variable, real (DC/Tran) | 4-byte `float` | 8-byte `double` | 4-byte `float` |
-| Circuit variable, complex (AC) | 4-byte `float` × 2 (re+im) | 8-byte `double` × 2 (re+im) | 4-byte `float` × 2 (re+im) |
+| Circuit variable, real (DC/Tran) or probe | 4-byte `float` | 8-byte `double` | 4-byte `float` |
+| Circuit variable, complex (AC variables) | 4-byte `float` × 2 (re+im) | 8-byte `double` × 2 (re+im) | 4-byte `float` × 2 (re+im) |
 
 *   **Scale Variable**: The first variable in each record is the abscissa (`TIME` for transient, `HERTZ` for AC, or the swept source value for DC).
 *   **Circuit Variables**: All other signals (node voltages, branch currents, device probes).
@@ -123,21 +126,23 @@ Variable storage sizes depend on the format version and analysis type:
     For the same simulation in **9601** format:
     $$\text{Row Size} = 4 \text{ (TIME float)} + 3 \times 4 \text{ (float)} = 16 \text{ bytes}$$
 
-    #### AC Example
-    For an AC simulation with 3 circuit variables in **2013** format:
-    $$\text{Row Size} = 8 \text{ (HERTZ double)} + 3 \times 8 \text{ (complex float)} = 32 \text{ bytes}$$
-
-    For the same in **2001** format:
-    $$\text{Row Size} = 8 \text{ (HERTZ double)} + 3 \times 16 \text{ (complex double)} = 56 \text{ bytes}$$
+    #### AC Example (with Probes)
+    For an AC simulation with 4 circuit variables (2 complex variables + 2 real probes) in **2013** format:
+    $$\text{Row Size} = 8 \text{ (HERTZ double)} + 2 \times 8 \text{ (complex float)} + 2 \times 4 \text{ (real float)} = 32 \text{ bytes}$$
 
 ### 4.2 Swept Simulations & Sweep Values
 
 If a simulation includes parameter sweeps (`numOfSweeps > 0`):
-1. The simulation data is partitioned into separate **sweep tables**, one per swept point value. The number of tables equals `sweepSize` read from header offset `187`.
-2. Each sweep table begins with the **sweep value** (e.g., temperature, source voltage, or parameter value):
-   - **`2013`, `9601`, `9007` formats**: stored as a **4-byte single-precision float**.
-   - **`2001` format**: stored as an **8-byte double-precision float** (consistent with its all-double data layout).
-3. Following the sweep value, the standard hybrid precision data rows are written consecutively until the sweep table termination block (see §4.3).
+1. The simulation data is partitioned into separate **sweep tables**, one per swept point value. The number of tables equals `sweepSize`.
+2. Each sweep table begins with a **sweep value prefix** consisting of $k$ swept parameter values:
+   - **`2013`, `9601`, `9007` formats**: stored as **4-byte single-precision floats**.
+   - **`2001` format**: stored as **8-byte double-precision floats**.
+   - The value of $k$ satisfies $0 \le k \le \text{numOfSweeps}$ and must be determined dynamically based on block alignment:
+     
+     $$\text{rem} = (\text{Table Size (Bytes)} - k \times \text{Size}(\text{sweep value})) \pmod{\text{Row Size}} == 0$$
+     
+     In multi-parameter or `.DATA` sweeps, non-parameter sweep names (like data block names) do not write numeric values to the prefix, resulting in $k < \text{numOfSweeps}$.
+3. Following the sweep value prefix, the standard hybrid precision data rows are written consecutively until the sweep table termination block (see §4.3).§4.3).
 
 ### 4.3 Sweep Table Termination & Block Chaining
 
